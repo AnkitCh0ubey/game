@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Web Bluetooth Mini Militia</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background: #1a1a2e;
+            color: #eee;
+            font-family: 'Courier New', monospace;
+            overflow: hidden;
+        }
+        
+        #gameContainer {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: linear-gradient(135deg, #16213e 0%, #1a1a2e 100%);
+        }
+        
+        #gameCanvas {
+            border: 2px solid #0f3460;
+            background: #0f1419;
+            display: block;
+            margin: 0 auto;
+        }
+        
+        #ui {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            z-index: 100;
+        }
+        
+        #bluetoothStatus {
+            background: rgba(15, 52, 96, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            border: 1px solid #0f3460;
+        }
+        
+        #playerInfo {
+            background: rgba(26, 26, 46, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 10px;
+            border: 1px solid #0f3460;
+        }
+        
+        #bluetoothControls {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: rgba(15, 52, 96, 0.8);
+            padding: 10px;
+            border-radius: 5px;
+            border: 1px solid #0f3460;
+            max-width: 250px;
+        }
+        
+        #gameControls {
+            position: absolute;
+            bottom: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(15, 52, 96, 0.8);
+            padding: 15px;
+            border-radius: 10px;
+            border: 1px solid #0f3460;
+            text-align: center;
+        }
+        
+        button {
+            background: #0f3460;
+            color: #eee;
+            border: 1px solid #16213e;
+            padding: 8px 16px;
+            margin: 5px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-family: 'Courier New', monospace;
+        }
+        
+        button:hover {
+            background: #16213e;
+        }
+        
+        button:disabled {
+            background: #444;
+            cursor: not-allowed;
+        }
+        
+        .connected {
+            color: #4CAF50;
+        }
+        
+        .disconnected {
+            color: #f44336;
+        }
+        
+        .warning {
+            color: #ff9800;
+        }
+        
+        #deviceList {
+            max-height: 200px;
+            overflow-y: auto;
+            margin: 10px 0;
+        }
+        
+        .device-item {
+            padding: 5px;
+            margin: 2px 0;
+            background: rgba(26, 26, 46, 0.6);
+            border-radius: 3px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        
+        .device-item:hover {
+            background: rgba(26, 26, 46, 0.8);
+        }
+        
+        .device-item.connected {
+            background: rgba(76, 175, 80, 0.3);
+        }
+        
+        #compatibilityWarning {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            background: rgba(244, 67, 54, 0.9);
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            display: none;
+        }
+    </style>
+</head>
+<body>
+    <div id="gameContainer">
+        <canvas id="gameCanvas" width="800" height="600"></canvas>
+        
+        <div id="ui">
+            <div id="bluetoothStatus">
+                <div><strong>Web Bluetooth Status</strong></div>
+                <div>Available: <span id="bluetoothAvailable">Checking...</span></div>
+                <div>Connected Devices: <span id="connectedCount">0</span></div>
+                <div>Network Status: <span id="networkStatus">Offline</span></div>
+            </div>
+            
+            <div id="playerInfo">
+                <div><strong>Player Status</strong></div>
+                <div>Health: <span id="health">100</span></div>
+                <div>Ammo: <span id="ammo">30</span></div>
+                <div>Kills: <span id="kills">0</span></div>
+            </div>
+        </div>
+        
+        <div id="bluetoothControls">
+            <div><strong>Bluetooth Controls</strong></div>
+            <button id="scanBtn" onclick="scanForDevices()">Scan for Players</button>
+            <button id="hostBtn" onclick="hostGame()">Host Game</button>
+            <button id="disconnectBtn" onclick="disconnectAll()" disabled>Disconnect All</button>
+            
+            <div id="deviceList">
+                <div id="devices"></div>
+            </div>
+            
+            <div style="font-size: 11px; color: #888; margin-top: 10px;">
+                <strong>Requirements:</strong><br>
+                • Chrome/Edge browser<br>
+                • HTTPS connection<br>
+                • Bluetooth enabled<br>
+                • Same network or paired devices
+            </div>
+        </div>
+        
+        <div id="gameControls">
+            <div><strong>Game Controls</strong></div>
+            <div>WASD: Move | Mouse: Aim | Click: Shoot | R: Reload</div>
+            <button onclick="respawn()">Respawn</button>
+            <button onclick="toggleFullscreen()">Fullscreen</button>
+        </div>
+    </div>
+    
+    <div id="compatibilityWarning">
+        <h3>Web Bluetooth Not Supported</h3>
+        <p>This browser doesn't support Web Bluetooth API.</p>
+        <p>Please use Chrome, Edge, or Opera with HTTPS.</p>
+        <button onclick="hideWarning()">Continue with Simulation</button>
+    </div>
+
+    <script>
+        class WebBluetoothMesh {
+            constructor() {
+                this.devices = new Map();
+                this.characteristics = new Map();
+                this.isHost = false;
+                this.gameRoomId = null;
+                this.messageQueue = [];
+                
+                // Custom service UUID for the game
+                this.SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
+                this.CHARACTERISTIC_UUID = '87654321-4321-4321-4321-cba987654321';
+                
+                this.checkCompatibility();
+            }
+            
+            checkCompatibility() {
+                const available = navigator.bluetooth && navigator.bluetooth.getAvailability;
+                document.getElementById('bluetoothAvailable').textContent = available ? 'Yes' : 'No';
+                document.getElementById('bluetoothAvailable').className = available ? 'connected' : 'disconnected';
+                
+                if (!available) {
+                    document.getElementById('compatibilityWarning').style.display = 'block';
+                    document.getElementById('scanBtn').disabled = true;
+                    document.getElementById('hostBtn').disabled = true;
+                }
+            }
+            
+            async scanForDevices() {
+                try {
+                    console.log('Scanning for Bluetooth devices...');
+                    document.getElementById('scanBtn').disabled = true;
+                    document.getElementById('scanBtn').textContent = 'Scanning...';
+                    
+                    // Request device with custom service
+                    const device = await navigator.bluetooth.requestDevice({
+                        filters: [
+                            { name: 'MiniMilitia' },
+                            { namePrefix: 'MiniMilitia' }
+                        ],
+                        optionalServices: [this.SERVICE_UUID]
+                    });
+                    
+                    await this.connectToDevice(device);
+                    
+                } catch (error) {
+                    console.error('Bluetooth scan error:', error);
+                    this.showFallbackScan();
+                } finally {
+                    document.getElementById('scanBtn').disabled = false;
+                    document.getElementById('scanBtn').textContent = 'Scan for Players';
+                }
+            }
+            
+            showFallbackScan() {
+                // Show nearby simulated devices for demo
+                const simulatedDevices = [
+                    { name: 'Player_Alpha', id: 'sim_alpha', rssi: -45 },
+                    { name: 'Player_Beta', id: 'sim_beta', rssi: -60 },
+                    { name: 'Player_Gamma', id: 'sim_gamma', rssi: -75 }
+                ];
+                
+                this.updateDeviceList(simulatedDevices);
+            }
+            
+            async connectToDevice(device) {
+                try {
+                    console.log('Connecting to device:', device.name);
+                    
+                    device.addEventListener('gattserverdisconnected', () => {
+                        console.log('Device disconnected:', device.name);
+                        this.devices.delete(device.id);
+                        this.updateUI();
+                    });
+                    
+                    const server = await device.gatt.connect();
+                    const service = await server.getPrimaryService(this.SERVICE_UUID);
+                    const characteristic = await service.getCharacteristic(this.CHARACTERISTIC_UUID);
+                    
+                    // Setup notifications
+                    await characteristic.startNotifications();
+                    characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                        this.handleMessage(event.target.value);
+                    });
+                    
+                    this.devices.set(device.id, {
+                        device,
+                        server,
+                        characteristic,
+                        name: device.name,
+                        connected: true
+                    });
+                    
+                    this.updateUI();
+                    
+                } catch (error) {
+                    console.error('Connection error:', error);
+                    // Fall back to simulated connection
+                    this.simulateConnection(device);
+                }
+            }
+            
+            simulateConnection(device) {
+                // Simulate connection for demo purposes
+                this.devices.set(device.id || 'sim_' + Date.now(), {
+                    device: { name: device.name || 'Simulated Player' },
+                    connected: true,
+                    simulated: true
+                });
+                this.updateUI();
+            }
+            
+            async hostGame() {
+                try {
+                    this.isHost = true;
+                    this.gameRoomId = 'room_' + Date.now();
+                    
+                    // In real implementation, this would advertise the service
+                    console.log('Hosting game room:', this.gameRoomId);
+                    
+                    // Simulate hosting
+                    document.getElementById('hostBtn').textContent = 'Hosting...';
+                    document.getElementById('hostBtn').disabled = true;
+                    
+                    // Update UI
+                    document.getElementById('networkStatus').textContent = 'Hosting';
+                    document.getElementById('networkStatus').className = 'connected';
+                    
+                    this.broadcastMessage({
+                        type: 'room_created',
+                        roomId: this.gameRoomId,
+                        host: 'local_player'
+                    });
+                    
+                } catch (error) {
+                    console.error('Host error:', error);
+                }
+            }
+            
+            updateDeviceList(devices) {
+                const deviceDiv = document.getElementById('devices');
+                deviceDiv.innerHTML = '';
+                
+                devices.forEach(device => {
+                    const deviceItem = document.createElement('div');
+                    deviceItem.className = 'device-item';
+                    deviceItem.innerHTML = `
+                        <div>${device.name}</div>
+                        <div style="font-size: 10px; color: #888;">
+                            Signal: ${device.rssi}dBm
+                        </div>
+                    `;
+                    deviceItem.onclick = () => this.simulateConnection(device);
+                    deviceDiv.appendChild(deviceItem);
+                });
+            }
+            
+            broadcastMessage(message) {
+                const messageStr = JSON.stringify(message);
+                console.log('Broadcasting:', messageStr);
+                
+                // In real implementation, send to all connected devices
+                this.devices.forEach((deviceInfo, deviceId) => {
+                    if (deviceInfo.connected) {
+                        if (deviceInfo.simulated) {
+                            // Simulate message sending
+                            setTimeout(() => {
+                                game.handleNetworkMessage(message);
+                            }, Math.random() * 100);
+                        } else {
+                            // Real Bluetooth sending
+                            this.sendToDevice(deviceId, messageStr);
+                        }
+                    }
+                });
+            }
+            
+            async sendToDevice(deviceId, message) {
+                const deviceInfo = this.devices.get(deviceId);
+                if (deviceInfo && deviceInfo.characteristic) {
+                    try {
+                        const encoder = new TextEncoder();
+                        const data = encoder.encode(message);
+                        await deviceInfo.characteristic.writeValue(data);
+                    } catch (error) {
+                        console.error('Send error:', error);
+                    }
+                }
+            }
+            
+            handleMessage(value) {
+                const decoder = new TextDecoder();
+                const message = decoder.decode(value);
+                
+                try {
+                    const data = JSON.parse(message);
+                    game.handleNetworkMessage(data);
+                } catch (error) {
+                    console.error('Message parse error:', error);
+                }
+            }
+            
+            disconnectAll() {
+                this.devices.forEach((deviceInfo, deviceId) => {
+                    if (deviceInfo.server) {
+                        deviceInfo.server.disconnect();
+                    }
+                });
+                this.devices.clear();
+                this.updateUI();
+            }
+            
+            updateUI() {
+                document.getElementById('connectedCount').textContent = this.devices.size;
+                document.getElementById('disconnectBtn').disabled = this.devices.size === 0;
+                
+                if (this.devices.size > 0) {
+                    document.getElementById('networkStatus').textContent = 'Connected';
+                    document.getElementById('networkStatus').className = 'connected';
+                } else if (!this.isHost) {
+                    document.getElementById('networkStatus').textContent = 'Offline';
+                    document.getElementById('networkStatus').className = 'disconnected';
+                }
+            }
+        }
+        
+        // Simple game implementation
+        class Game {
+            constructor() {
+                this.canvas = document.getElementById('gameCanvas');
+                this.ctx = this.canvas.getContext('2d');
+                this.player = {
+                    x: 400,
+                    y: 300,
+                    angle: 0,
+                    health: 100,
+                    ammo: 30,
+                    kills: 0,
+                    alive: true
+                };
+                this.bullets = [];
+                this.enemies = new Map();
+                this.keys = {};
+                this.mouse = { x: 0, y: 0 };
+                
+                this.setupEventListeners();
+                this.gameLoop();
+            }
+            
+            setupEventListeners() {
+                document.addEventListener('keydown', (e) => {
+                    this.keys[e.key.toLowerCase()] = true;
+                    if (e.key.toLowerCase() === 'r') {
+                        this.reload();
+                    }
+                });
+                
+                document.addEventListener('keyup', (e) => {
+                    this.keys[e.key.toLowerCase()] = false;
+                });
+                
+                this.canvas.addEventListener('mousemove', (e) => {
+                    const rect = this.canvas.getBoundingClientRect();
+                    this.mouse.x = e.clientX - rect.left;
+                    this.mouse.y = e.clientY - rect.top;
+                });
+                
+                this.canvas.addEventListener('click', () => {
+                    this.shoot();
+                });
+            }
+            
+            update() {
+                if (!this.player.alive) return;
+                
+                // Movement
+                if (this.keys['w']) this.player.y -= 3;
+                if (this.keys['s']) this.player.y += 3;
+                if (this.keys['a']) this.player.x -= 3;
+                if (this.keys['d']) this.player.x += 3;
+                
+                // Boundaries
+                this.player.x = Math.max(20, Math.min(780, this.player.x));
+                this.player.y = Math.max(20, Math.min(580, this.player.y));
+                
+                // Aim
+                this.player.angle = Math.atan2(this.mouse.y - this.player.y, this.mouse.x - this.player.x);
+                
+                // Update bullets
+                this.bullets = this.bullets.filter(bullet => {
+                    bullet.x += Math.cos(bullet.angle) * 5;
+                    bullet.y += Math.sin(bullet.angle) * 5;
+                    return bullet.x > 0 && bullet.x < 800 && bullet.y > 0 && bullet.y < 600;
+                });
+                
+                // Send position update
+                if (bluetoothMesh.devices.size > 0) {
+                    bluetoothMesh.broadcastMessage({
+                        type: 'player_update',
+                        player: {
+                            x: this.player.x,
+                            y: this.player.y,
+                            angle: this.player.angle,
+                            health: this.player.health,
+                            alive: this.player.alive
+                        }
+                    });
+                }
+                
+                this.updateUI();
+            }
+            
+            shoot() {
+                if (!this.player.alive || this.player.ammo <= 0) return;
+                
+                const bullet = {
+                    x: this.player.x,
+                    y: this.player.y,
+                    angle: this.player.angle,
+                    owner: 'local_player'
+                };
+                
+                this.bullets.push(bullet);
+                this.player.ammo--;
+                
+                // Broadcast shot
+                bluetoothMesh.broadcastMessage({
+                    type: 'shot',
+                    bullet: bullet
+                });
+            }
+            
+            reload() {
+                this.player.ammo = 30;
+            }
+            
+            handleNetworkMessage(message) {
+                switch (message.type) {
+                    case 'player_update':
+                        this.enemies.set(message.sender || 'remote_player', {
+                            ...message.player,
+                            lastUpdate: Date.now()
+                        });
+                        break;
+                    case 'shot':
+                        if (message.bullet.owner !== 'local_player') {
+                            this.bullets.push(message.bullet);
+                        }
+                        break;
+                }
+            }
+            
+            render() {
+                this.ctx.fillStyle = '#0f1419';
+                this.ctx.fillRect(0, 0, 800, 600);
+                
+                // Draw grid
+                this.ctx.strokeStyle = '#1a2332';
+                this.ctx.lineWidth = 1;
+                for (let i = 0; i < 800; i += 40) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(i, 0);
+                    this.ctx.lineTo(i, 600);
+                    this.ctx.stroke();
+                }
+                for (let i = 0; i < 600; i += 40) {
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(0, i);
+                    this.ctx.lineTo(800, i);
+                    this.ctx.stroke();
+                }
+                
+                // Draw player
+                if (this.player.alive) {
+                    this.ctx.fillStyle = '#4CAF50';
+                    this.ctx.beginPath();
+                    this.ctx.arc(this.player.x, this.player.y, 10, 0, Math.PI * 2);
+                    this.ctx.fill();
+                    
+                    // Draw gun
+                    this.ctx.strokeStyle = '#4CAF50';
+                    this.ctx.lineWidth = 3;
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(this.player.x, this.player.y);
+                    this.ctx.lineTo(
+                        this.player.x + Math.cos(this.player.angle) * 20,
+                        this.player.y + Math.sin(this.player.angle) * 20
+                    );
+                    this.ctx.stroke();
+                }
+                
+                // Draw enemies
+                for (let [id, enemy] of this.enemies) {
+                    if (Date.now() - enemy.lastUpdate > 3000) {
+                        this.enemies.delete(id);
+                        continue;
+                    }
+                    
+                    if (enemy.alive) {
+                        this.ctx.fillStyle = '#f44336';
+                        this.ctx.beginPath();
+                        this.ctx.arc(enemy.x, enemy.y, 10, 0, Math.PI * 2);
+                        this.ctx.fill();
+                        
+                        // Draw gun
+                        this.ctx.strokeStyle = '#f44336';
+                        this.ctx.lineWidth = 3;
+                        this.ctx.beginPath();
+                        this.ctx.moveTo(enemy.x, enemy.y);
+                        this.ctx.lineTo(
+                            enemy.x + Math.cos(enemy.angle) * 20,
+                            enemy.y + Math.sin(enemy.angle) * 20
+                        );
+                        this.ctx.stroke();
+                    }
+                }
+                
+                // Draw bullets
+                this.ctx.fillStyle = '#FFC107';
+                this.bullets.forEach(bullet => {
+                    this.ctx.beginPath();
+                    this.ctx.arc(bullet.x, bullet.y, 3, 0, Math.PI * 2);
+                    this.ctx.fill();
+                });
+                
+                // Draw Bluetooth status
+                if (bluetoothMesh.devices.size > 0) {
+                    this.ctx.fillStyle = '#4CAF50';
+                    this.ctx.font = '12px Courier New';
+                    this.ctx.fillText(`Bluetooth: ${bluetoothMesh.devices.size} connected`, 10, 580);
+                }
+            }
+            
+            updateUI() {
+                document.getElementById('health').textContent = this.player.health;
+                document.getElementById('ammo').textContent = this.player.ammo;
+                document.getElementById('kills').textContent = this.player.kills;
+            }
+            
+            gameLoop() {
+                this.update();
+                this.render();
+                requestAnimationFrame(() => this.gameLoop());
+            }
+        }
+        
+        // Initialize
+        const bluetoothMesh = new WebBluetoothMesh();
+        const game = new Game();
+        
+        // Global functions
+        function scanForDevices() {
+            bluetoothMesh.scanForDevices();
+        }
+        
+        function hostGame() {
+            bluetoothMesh.hostGame();
+        }
+        
+        function disconnectAll() {
+            bluetoothMesh.disconnectAll();
+        }
+        
+        function respawn() {
+            game.player.health = 100;
+            game.player.ammo = 30;
+            game.player.alive = true;
+            game.player.x = 400;
+            game.player.y = 300;
+        }
+        
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen();
+            } else {
+                document.exitFullscreen();
+            }
+        }
+        
+        function hideWarning() {
+            document.getElementById('compatibilityWarning').style.display = 'none';
+        }
+        
+        console.log('Web Bluetooth Mini Militia Ready!');
+    </script>
+</body>
+</html>
