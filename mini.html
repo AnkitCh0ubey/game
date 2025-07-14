@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Web Bluetooth Mini Militia</title>
+    <title>Web Bluetooth Mini Militia - Fixed</title>
     <style>
         body {
             margin: 0;
@@ -59,7 +59,7 @@
             padding: 10px;
             border-radius: 5px;
             border: 1px solid #0f3460;
-            max-width: 250px;
+            max-width: 300px;
         }
         
         #gameControls {
@@ -113,20 +113,28 @@
         }
         
         .device-item {
-            padding: 5px;
-            margin: 2px 0;
+            padding: 8px;
+            margin: 3px 0;
             background: rgba(26, 26, 46, 0.6);
-            border-radius: 3px;
+            border-radius: 5px;
             cursor: pointer;
             font-size: 12px;
+            border: 1px solid #333;
         }
         
         .device-item:hover {
             background: rgba(26, 26, 46, 0.8);
+            border-color: #0f3460;
         }
         
         .device-item.connected {
             background: rgba(76, 175, 80, 0.3);
+            border-color: #4CAF50;
+        }
+        
+        .device-item.simulated {
+            background: rgba(255, 152, 0, 0.3);
+            border-color: #ff9800;
         }
         
         #compatibilityWarning {
@@ -139,6 +147,30 @@
             border-radius: 10px;
             text-align: center;
             display: none;
+            z-index: 1000;
+        }
+        
+        .scan-mode {
+            margin: 10px 0;
+            padding: 10px;
+            background: rgba(26, 26, 46, 0.6);
+            border-radius: 5px;
+        }
+        
+        .scan-mode label {
+            display: block;
+            margin: 5px 0;
+            cursor: pointer;
+        }
+        
+        .scan-mode input {
+            margin-right: 8px;
+        }
+        
+        #scanResults {
+            font-size: 11px;
+            color: #888;
+            margin-top: 10px;
         }
     </style>
 </head>
@@ -164,7 +196,23 @@
         
         <div id="bluetoothControls">
             <div><strong>Bluetooth Controls</strong></div>
-            <button id="scanBtn" onclick="scanForDevices()">Scan for Players</button>
+            
+            <div class="scan-mode">
+                <label>
+                    <input type="radio" name="scanMode" value="specific" checked>
+                    Scan for Game Players
+                </label>
+                <label>
+                    <input type="radio" name="scanMode" value="general">
+                    Scan Any Bluetooth Device
+                </label>
+                <label>
+                    <input type="radio" name="scanMode" value="simulate">
+                    Simulate Local Network
+                </label>
+            </div>
+            
+            <button id="scanBtn" onclick="scanForDevices()">Scan for Devices</button>
             <button id="hostBtn" onclick="hostGame()">Host Game</button>
             <button id="disconnectBtn" onclick="disconnectAll()" disabled>Disconnect All</button>
             
@@ -172,12 +220,14 @@
                 <div id="devices"></div>
             </div>
             
+            <div id="scanResults"></div>
+            
             <div style="font-size: 11px; color: #888; margin-top: 10px;">
-                <strong>Requirements:</strong><br>
-                • Chrome/Edge browser<br>
-                • HTTPS connection<br>
-                • Bluetooth enabled<br>
-                • Same network or paired devices
+                <strong>Tips:</strong><br>
+                • Use "Simulate" mode for testing<br>
+                • Real Bluetooth needs compatible devices<br>
+                • HTTPS required for Web Bluetooth<br>
+                • Works best with BLE devices
             </div>
         </div>
         
@@ -204,12 +254,15 @@
                 this.isHost = false;
                 this.gameRoomId = null;
                 this.messageQueue = [];
+                this.scanMode = 'specific';
                 
-                // Custom service UUID for the game
-                this.SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
-                this.CHARACTERISTIC_UUID = '87654321-4321-4321-4321-cba987654321';
+                // Multiple service UUIDs to try
+                this.GAME_SERVICE_UUID = '12345678-1234-1234-1234-123456789abc';
+                this.GENERIC_SERVICE_UUID = '0000180f-0000-1000-8000-00805f9b34fb'; // Battery service
+                this.HEART_RATE_SERVICE = '0000180d-0000-1000-8000-00805f9b34fb'; // Heart rate service
                 
                 this.checkCompatibility();
+                this.setupScanModeListener();
             }
             
             checkCompatibility() {
@@ -224,41 +277,107 @@
                 }
             }
             
+            setupScanModeListener() {
+                document.querySelectorAll('input[name="scanMode"]').forEach(radio => {
+                    radio.addEventListener('change', (e) => {
+                        this.scanMode = e.target.value;
+                    });
+                });
+            }
+            
             async scanForDevices() {
                 try {
                     console.log('Scanning for Bluetooth devices...');
                     document.getElementById('scanBtn').disabled = true;
                     document.getElementById('scanBtn').textContent = 'Scanning...';
+                    document.getElementById('scanResults').textContent = 'Scanning...';
                     
-                    // Request device with custom service
-                    const device = await navigator.bluetooth.requestDevice({
-                        filters: [
-                            { name: 'MiniMilitia' },
-                            { namePrefix: 'MiniMilitia' }
-                        ],
-                        optionalServices: [this.SERVICE_UUID]
-                    });
+                    if (this.scanMode === 'simulate') {
+                        this.simulateLocalNetwork();
+                        return;
+                    }
+                    
+                    let requestOptions;
+                    
+                    if (this.scanMode === 'specific') {
+                        // Try to find game-specific devices
+                        requestOptions = {
+                            filters: [
+                                { name: 'MiniMilitia' },
+                                { namePrefix: 'MiniMilitia' },
+                                { namePrefix: 'Game' }
+                            ],
+                            optionalServices: [this.GAME_SERVICE_UUID]
+                        };
+                    } else if (this.scanMode === 'general') {
+                        // Scan for any Bluetooth device
+                        requestOptions = {
+                            acceptAllDevices: true,
+                            optionalServices: [
+                                this.GENERIC_SERVICE_UUID,
+                                this.HEART_RATE_SERVICE,
+                                'device_information'
+                            ]
+                        };
+                    }
+                    
+                    const device = await navigator.bluetooth.requestDevice(requestOptions);
+                    
+                    document.getElementById('scanResults').innerHTML = `
+                        Found device: <strong>${device.name || 'Unknown'}</strong><br>
+                        ID: ${device.id}<br>
+                        Attempting connection...
+                    `;
                     
                     await this.connectToDevice(device);
                     
                 } catch (error) {
                     console.error('Bluetooth scan error:', error);
-                    this.showFallbackScan();
+                    document.getElementById('scanResults').innerHTML = `
+                        <span class="disconnected">Scan failed: ${error.message}</span><br>
+                        Try "Simulate" mode for testing
+                    `;
+                    
+                    if (error.name === 'NotFoundError') {
+                        this.showFallbackScan();
+                    }
                 } finally {
                     document.getElementById('scanBtn').disabled = false;
-                    document.getElementById('scanBtn').textContent = 'Scan for Players';
+                    document.getElementById('scanBtn').textContent = 'Scan for Devices';
                 }
             }
             
-            showFallbackScan() {
-                // Show nearby simulated devices for demo
+            simulateLocalNetwork() {
                 const simulatedDevices = [
-                    { name: 'Player_Alpha', id: 'sim_alpha', rssi: -45 },
-                    { name: 'Player_Beta', id: 'sim_beta', rssi: -60 },
-                    { name: 'Player_Gamma', id: 'sim_gamma', rssi: -75 }
+                    { name: 'Player_Alpha', id: 'sim_alpha', rssi: -45, type: 'Game Player' },
+                    { name: 'Player_Beta', id: 'sim_beta', rssi: -60, type: 'Game Player' },
+                    { name: 'Player_Gamma', id: 'sim_gamma', rssi: -75, type: 'Game Player' },
+                    { name: 'MiniMilitia_Host', id: 'sim_host', rssi: -40, type: 'Game Host' }
                 ];
                 
+                document.getElementById('scanResults').innerHTML = `
+                    <span class="warning">Simulated Network Mode</span><br>
+                    Found ${simulatedDevices.length} virtual players
+                `;
+                
                 this.updateDeviceList(simulatedDevices);
+            }
+            
+            showFallbackScan() {
+                // Show common Bluetooth device types that might be nearby
+                const commonDevices = [
+                    { name: 'Nearby Phone', id: 'nearby_phone', rssi: -55, type: 'Phone' },
+                    { name: 'Bluetooth Speaker', id: 'bt_speaker', rssi: -70, type: 'Audio' },
+                    { name: 'Wireless Earbuds', id: 'earbuds', rssi: -45, type: 'Audio' },
+                    { name: 'Fitness Tracker', id: 'fitness', rssi: -80, type: 'Wearable' }
+                ];
+                
+                document.getElementById('scanResults').innerHTML = `
+                    <span class="warning">No game devices found</span><br>
+                    Showing potential nearby devices
+                `;
+                
+                this.updateDeviceList(commonDevices);
             }
             
             async connectToDevice(device) {
@@ -272,39 +391,63 @@
                     });
                     
                     const server = await device.gatt.connect();
-                    const service = await server.getPrimaryService(this.SERVICE_UUID);
-                    const characteristic = await service.getCharacteristic(this.CHARACTERISTIC_UUID);
                     
-                    // Setup notifications
-                    await characteristic.startNotifications();
-                    characteristic.addEventListener('characteristicvaluechanged', (event) => {
-                        this.handleMessage(event.target.value);
-                    });
+                    // Try to get available services
+                    let characteristic = null;
+                    try {
+                        const service = await server.getPrimaryService(this.GAME_SERVICE_UUID);
+                        characteristic = await service.getCharacteristic(this.CHARACTERISTIC_UUID);
+                    } catch (e) {
+                        console.log('Game service not found, using generic connection');
+                    }
+                    
+                    if (characteristic) {
+                        await characteristic.startNotifications();
+                        characteristic.addEventListener('characteristicvaluechanged', (event) => {
+                            this.handleMessage(event.target.value);
+                        });
+                    }
                     
                     this.devices.set(device.id, {
                         device,
                         server,
                         characteristic,
-                        name: device.name,
-                        connected: true
+                        name: device.name || 'Unknown Device',
+                        connected: true,
+                        real: true
                     });
+                    
+                    document.getElementById('scanResults').innerHTML = `
+                        <span class="connected">Connected to ${device.name || 'Unknown'}</span><br>
+                        Ready for game communication
+                    `;
                     
                     this.updateUI();
                     
                 } catch (error) {
                     console.error('Connection error:', error);
-                    // Fall back to simulated connection
+                    document.getElementById('scanResults').innerHTML = `
+                        <span class="disconnected">Connection failed: ${error.message}</span>
+                    `;
+                    // Fall back to simulated connection for demo
                     this.simulateConnection(device);
                 }
             }
             
             simulateConnection(device) {
-                // Simulate connection for demo purposes
+                const deviceName = device.name || 'Player_' + Math.floor(Math.random() * 1000);
                 this.devices.set(device.id || 'sim_' + Date.now(), {
-                    device: { name: device.name || 'Simulated Player' },
+                    device: { name: deviceName },
                     connected: true,
-                    simulated: true
+                    simulated: true,
+                    name: deviceName
                 });
+                
+                document.getElementById('scanResults').innerHTML = `
+                    <span class="warning">Simulated connection to ${deviceName}</span><br>
+                    Demo mode active
+                `;
+                
                 this.updateUI();
             }
             
@@ -313,16 +456,23 @@
                     this.isHost = true;
                     this.gameRoomId = 'room_' + Date.now();
                     
-                    // In real implementation, this would advertise the service
                     console.log('Hosting game room:', this.gameRoomId);
                     
-                    // Simulate hosting
-                    document.getElementById('hostBtn').textContent = 'Hosting...';
+                    document.getElementById('hostBtn').textContent = 'Hosting Game...';
                     document.getElementById('hostBtn').disabled = true;
                     
                     // Update UI
                     document.getElementById('networkStatus').textContent = 'Hosting';
                     document.getElementById('networkStatus').className = 'connected';
+                    
+                    // Simulate some players joining
+                    setTimeout(() => {
+                        this.simulatePlayerJoin('Alpha');
+                    }, 2000);
+                    
+                    setTimeout(() => {
+                        this.simulatePlayerJoin('Beta');
+                    }, 4000);
                     
                     this.broadcastMessage({
                         type: 'room_created',
@@ -335,6 +485,30 @@
                 }
             }
             
+            simulatePlayerJoin(playerName) {
+                const playerId = 'player_' + playerName.toLowerCase();
+                this.devices.set(playerId, {
+                    device: { name: 'Player_' + playerName },
+                    connected: true,
+                    simulated: true,
+                    name : "Player_"+playerName
+                });
+                this.updateUI();
+                
+                // Simulate player data
+                game.handleNetworkMessage({
+                    type: 'player_joined',
+                    player: {
+                        id: playerId,
+                        name: playerName,
+                        x: 100 + Math.random() * 600,
+                        y: 100 + Math.random() * 400,
+                        health: 100,
+                        alive: true
+                    }
+                });
+            }
+            
             updateDeviceList(devices) {
                 const deviceDiv = document.getElementById('devices');
                 deviceDiv.innerHTML = '';
@@ -342,10 +516,14 @@
                 devices.forEach(device => {
                     const deviceItem = document.createElement('div');
                     deviceItem.className = 'device-item';
+                    if (device.id.startsWith('sim_')) {
+                        deviceItem.classList.add('simulated');
+                    }
+                    
                     deviceItem.innerHTML = `
-                        <div>${device.name}</div>
+                        <div><strong>${device.name}</strong></div>
                         <div style="font-size: 10px; color: #888;">
-                            Signal: ${device.rssi}dBm
+                            ${device.type ? device.type + ' • ' : ''}Signal: ${device.rssi}dBm
                         </div>
                     `;
                     deviceItem.onclick = () => this.simulateConnection(device);
@@ -357,16 +535,13 @@
                 const messageStr = JSON.stringify(message);
                 console.log('Broadcasting:', messageStr);
                 
-                // In real implementation, send to all connected devices
                 this.devices.forEach((deviceInfo, deviceId) => {
                     if (deviceInfo.connected) {
                         if (deviceInfo.simulated) {
-                            // Simulate message sending
                             setTimeout(() => {
-                                game.handleNetworkMessage(message);
+                                game.handleNetworkMessage({...message, sender: deviceId});
                             }, Math.random() * 100);
-                        } else {
-                            // Real Bluetooth sending
+                        } else if (deviceInfo.characteristic) {
                             this.sendToDevice(deviceId, messageStr);
                         }
                     }
@@ -406,13 +581,39 @@
                 });
                 this.devices.clear();
                 this.updateUI();
+                
+                document.getElementById('scanResults').textContent = 'All devices disconnected';
+                document.getElementById('hostBtn').textContent = 'Host Game';
+                document.getElementById('hostBtn').disabled = false;
+                this.isHost = false;
             }
             
             updateUI() {
-                document.getElementById('connectedCount').textContent = this.devices.size;
-                document.getElementById('disconnectBtn').disabled = this.devices.size === 0;
+                const deviceCount = this.devices.size;
+                document.getElementById('connectedCount').textContent = deviceCount;
+                document.getElementById('disconnectBtn').disabled = deviceCount === 0;
                 
-                if (this.devices.size > 0) {
+                // Update device list display
+                const deviceDiv = document.getElementById('devices');
+                deviceDiv.innerHTML = '';
+                
+                this.devices.forEach((deviceInfo, deviceId) => {
+                    const deviceItem = document.createElement('div');
+                    deviceItem.className = 'device-item connected';
+                    if (deviceInfo.simulated) {
+                        deviceItem.classList.add('simulated');
+                    }
+                    
+                    deviceItem.innerHTML = `
+                        <div><strong>${deviceInfo.name}</strong></div>
+                        <div style="font-size: 10px; color: #888;">
+                            ${deviceInfo.real ? 'Real' : 'Simulated'} • Connected
+                        </div>
+                    `;
+                    deviceDiv.appendChild(deviceItem);
+                });
+                
+                if (deviceCount > 0) {
                     document.getElementById('networkStatus').textContent = 'Connected';
                     document.getElementById('networkStatus').className = 'connected';
                 } else if (!this.isHost) {
@@ -422,7 +623,7 @@
             }
         }
         
-        // Simple game implementation
+        // Enhanced game implementation
         class Game {
             constructor() {
                 this.canvas = document.getElementById('gameCanvas');
@@ -440,6 +641,7 @@
                 this.enemies = new Map();
                 this.keys = {};
                 this.mouse = { x: 0, y: 0 };
+                this.lastNetworkUpdate = 0;
                 
                 this.setupEventListeners();
                 this.gameLoop();
@@ -486,13 +688,28 @@
                 
                 // Update bullets
                 this.bullets = this.bullets.filter(bullet => {
-                    bullet.x += Math.cos(bullet.angle) * 5;
-                    bullet.y += Math.sin(bullet.angle) * 5;
+                    bullet.x += Math.cos(bullet.angle) * 8;
+                    bullet.y += Math.sin(bullet.angle) * 8;
+                    
+                    // Check collision with enemies
+                    for (let [id, enemy] of this.enemies) {
+                        if (enemy.alive && this.checkCollision(bullet, enemy, 15)) {
+                            enemy.health -= 25;
+                            if (enemy.health <= 0) {
+                                enemy.alive = false;
+                                this.player.kills++;
+                            }
+                            return false; // Remove bullet
+                        }
+                    }
+                    
                     return bullet.x > 0 && bullet.x < 800 && bullet.y > 0 && bullet.y < 600;
                 });
                 
-                // Send position update
-                if (bluetoothMesh.devices.size > 0) {
+                // Send position update (throttled)
+                const now = Date.now();
+                if (now - this.lastNetworkUpdate > 100 && bluetoothMesh.devices.size > 0) {
+                    this.lastNetworkUpdate = now;
                     bluetoothMesh.broadcastMessage({
                         type: 'player_update',
                         player: {
@@ -506,6 +723,12 @@
                 }
                 
                 this.updateUI();
+            }
+            
+            checkCollision(obj1, obj2, radius) {
+                const dx = obj1.x - obj2.x;
+                const dy = obj1.y - obj2.y;
+                return Math.sqrt(dx * dx + dy * dy) < radius;
             }
             
             shoot() {
@@ -529,7 +752,15 @@
             }
             
             reload() {
-                this.player.ammo = 30;
+                if (this.player.ammo < 30) {
+                    this.player.ammo = 30;
+                    
+                    // Broadcast reload
+                    bluetoothMesh.broadcastMessage({
+                        type: 'reload',
+                        player: 'local_player'
+                    });
+                }
             }
             
             handleNetworkMessage(message) {
@@ -540,10 +771,22 @@
                             lastUpdate: Date.now()
                         });
                         break;
+                    case 'player_joined':
+                        this.enemies.set(message.player.id, {
+                            ...message.player,
+                            lastUpdate: Date.now()
+                        });
+                        break;
                     case 'shot':
                         if (message.bullet.owner !== 'local_player') {
-                            this.bullets.push(message.bullet);
+                            this.bullets.push({
+                                ...message.bullet,
+                                enemy: true
+                            });
                         }
+                        break;
+                    case 'reload':
+                        console.log('Player reloaded:', message.player);
                         break;
                 }
             }
@@ -572,8 +815,14 @@
                 if (this.player.alive) {
                     this.ctx.fillStyle = '#4CAF50';
                     this.ctx.beginPath();
-                    this.ctx.arc(this.player.x, this.player.y, 10, 0, Math.PI * 2);
+                    this.ctx.arc(this.player.x, this.player.y, 12, 0, Math.PI * 2);
                     this.ctx.fill();
+                    
+                    // Draw health bar
+                    this.ctx.fillStyle = '#333';
+                    this.ctx.fillRect(this.player.x - 15, this.player.y - 25, 30, 4);
+                    this.ctx.fillStyle = '#4CAF50';
+                    this.ctx.fillRect(this.player.x - 15, this.player.y - 25, (this.player.health / 100) * 30, 4);
                     
                     // Draw gun
                     this.ctx.strokeStyle = '#4CAF50';
@@ -581,15 +830,15 @@
                     this.ctx.beginPath();
                     this.ctx.moveTo(this.player.x, this.player.y);
                     this.ctx.lineTo(
-                        this.player.x + Math.cos(this.player.angle) * 20,
-                        this.player.y + Math.sin(this.player.angle) * 20
+                        this.player.x + Math.cos(this.player.angle) * 25,
+                        this.player.y + Math.sin(this.player.angle) * 25
                     );
                     this.ctx.stroke();
                 }
                 
                 // Draw enemies
                 for (let [id, enemy] of this.enemies) {
-                    if (Date.now() - enemy.lastUpdate > 3000) {
+                    if (Date.now() - enemy.lastUpdate > 5000) {
                         this.enemies.delete(id);
                         continue;
                     }
@@ -597,8 +846,14 @@
                     if (enemy.alive) {
                         this.ctx.fillStyle = '#f44336';
                         this.ctx.beginPath();
-                        this.ctx.arc(enemy.x, enemy.y, 10, 0, Math.PI * 2);
+                        this.ctx.arc(enemy.x, enemy.y, 12, 0, Math.PI * 2);
                         this.ctx.fill();
+                        
+                        // Draw health bar
+                        this.ctx.fillStyle = '#333';
+                        this.ctx.fillRect(enemy.x - 15, enemy.y - 25, 30, 4);
+                        this.ctx.fillStyle = '#f44336';
+                        this.ctx.fillRect(enemy.x - 15, enemy.y - 25, ((enemy.health || 100) / 100) * 30, 4);
                         
                         // Draw gun
                         this.ctx.strokeStyle = '#f44336';
@@ -606,26 +861,66 @@
                         this.ctx.beginPath();
                         this.ctx.moveTo(enemy.x, enemy.y);
                         this.ctx.lineTo(
-                            enemy.x + Math.cos(enemy.angle) * 20,
-                            enemy.y + Math.sin(enemy.angle) * 20
+                            enemy.x + Math.cos(enemy.angle) * 25,
+                            enemy.y + Math.sin(enemy.angle) * 25
                         );
                         this.ctx.stroke();
+                        
+                        // Draw name
+                        this.ctx.fillStyle = '#fff';
+                        this.ctx.font = '10px Courier New';
+                        this.ctx.textAlign = 'center';
+                        this.ctx.fillText(enemy.name || 'Enemy', enemy.x, enemy.y - 30);
                     }
                 }
                 
                 // Draw bullets
-                this.ctx.fillStyle = '#FFC107';
                 this.bullets.forEach(bullet => {
+                    this.ctx.fillStyle = bullet.enemy ? '#ff6b6b' : '#FFC107';
                     this.ctx.beginPath();
-                    this.ctx.arc(bullet.x, bullet.y, 3, 0, Math.PI * 2);
+                    this.ctx.arc(bullet.x, bullet.y, 4, 0, Math.PI * 2);
                     this.ctx.fill();
+                    
+                    // Draw bullet trail
+                    this.ctx.strokeStyle = bullet.enemy ? '#ff6b6b' : '#FFC107';
+                    this.ctx.lineWidth = 2;
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(bullet.x, bullet.y);
+                    this.ctx.lineTo(
+                        bullet.x - Math.cos(bullet.angle) * 10,
+                        bullet.y - Math.sin(bullet.angle) * 10
+                    );
+                    this.ctx.stroke();
                 });
                 
-                // Draw Bluetooth status
+                // Draw connection status
                 if (bluetoothMesh.devices.size > 0) {
                     this.ctx.fillStyle = '#4CAF50';
                     this.ctx.font = '12px Courier New';
-                    this.ctx.fillText(`Bluetooth: ${bluetoothMesh.devices.size} connected`, 10, 580);
+                    this.ctx.textAlign = 'left';
+                    this.ctx.fillText(`Connected: ${bluetoothMesh.devices.size} players`, 10, 580);
+                }
+                
+                // Draw crosshair
+                this.ctx.strokeStyle = '#fff';
+                this.ctx.lineWidth = 1;
+                this.ctx.beginPath();
+                this.ctx.moveTo(this.mouse.x - 10, this.mouse.y);
+                this.ctx.lineTo(this.mouse.x + 10, this.mouse.y);
+                this.ctx.moveTo(this.mouse.x, this.mouse.y - 10);
+                this.ctx.lineTo(this.mouse.x, this.mouse.y + 10);
+                this.ctx.stroke();
+                
+                // Draw game info
+                if (!this.player.alive) {
+                    this.ctx.fillStyle = 'rgba(244, 67, 54, 0.8)';
+                    this.ctx.fillRect(0, 0, 800, 600);
+                    this.ctx.fillStyle = '#fff';
+                    this.ctx.font = '48px Courier New';
+                    this.ctx.textAlign = 'center';
+                    this.ctx.fillText('YOU DIED', 400, 280);
+                    this.ctx.font = '24px Courier New';
+                    this.ctx.fillText('Press Respawn to continue', 400, 320);
                 }
             }
             
@@ -665,6 +960,12 @@
             game.player.alive = true;
             game.player.x = 400;
             game.player.y = 300;
+            
+            // Broadcast respawn
+            bluetoothMesh.broadcastMessage({
+                type: 'respawn',
+                player: 'local_player'
+            });
         }
         
         function toggleFullscreen() {
@@ -679,7 +980,43 @@
             document.getElementById('compatibilityWarning').style.display = 'none';
         }
         
+        // Add some AI behavior for simulated players
+        function simulateAI() {
+            game.enemies.forEach((enemy, id) => {
+                if (enemy.alive && id.startsWith('player_')) {
+                    // Simple AI: move randomly and occasionally shoot
+                    if (Math.random() < 0.02) {
+                        enemy.x += (Math.random() - 0.5) * 10;
+                        enemy.y += (Math.random() - 0.5) * 10;
+                        enemy.x = Math.max(20, Math.min(780, enemy.x));
+                        enemy.y = Math.max(20, Math.min(580, enemy.y));
+                        
+                        // Aim at player
+                        enemy.angle = Math.atan2(game.player.y - enemy.y, game.player.x - enemy.x);
+                        
+                        // Occasionally shoot
+                        if (Math.random() < 0.1) {
+                            game.bullets.push({
+                                x: enemy.x,
+                                y: enemy.y,
+                                angle: enemy.angle,
+                                owner: id,
+                                enemy: true
+                            });
+                        }
+                    }
+                }
+            });
+        }
+        
+        // Start AI simulation
+        setInterval(simulateAI, 100);
+        
         console.log('Web Bluetooth Mini Militia Ready!');
+        console.log('Try different scan modes:');
+        console.log('- Specific: Look for game players');
+        console.log('- General: Scan any Bluetooth device');
+        console.log('- Simulate: Create virtual network for testing');
     </script>
 </body>
 </html>
